@@ -1,0 +1,54 @@
+stages:
+  - stage_build
+  - stage_deploy
+  - stage_cleanup
+
+variables:
+    IMAGE_NAME: "cr.yandex/crpsasqahu0jl3spv96q/nginx"
+    DEPLOY_TAG: "finally"
+
+build:
+  stage: stage_build
+  tags: [myubuntu-runner]
+  only:
+    - dev
+  script:
+    - export PATH=$PATH:/usr/local/bin
+    - eval $(echo "$YCR_TOKEN" | docker login --username oauth --password-stdin cr.yandex)
+    - docker build -t $IMAGE_NAME:$DEPLOY_TAG .
+    - docker push $IMAGE_NAME:$DEPLOY_TAG
+
+deploy:
+  stage: stage_deploy
+  tags: [myubuntu-runner]
+  only:
+    - main
+  script:
+    - |
+      curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
+      export PATH=$PATH:$HOME/.local/bin
+
+      $HOME/yandex-cloud/bin/yc config set token "$YCR_TOKEN"
+      $HOME/yandex-cloud/bin/yc config set cloud-id "$CLOUD_ID"
+      $HOME/yandex-cloud/bin/yc config set folder-id "$FOLDER_ID"
+
+      $HOME/yandex-cloud/bin/yc serverless container revision deploy \
+        --container-name nginx \
+        --image $IMAGE_NAME:$DEPLOY_TAG \
+        --cores 1 \
+        --memory 1GB \
+        --concurrency 1 \
+        --execution-timeout 30s \
+        --service-account-id "$SA_ID"
+
+cleanup:
+  stage: stage_cleanup
+  tags: [myubuntu-runner]
+  script:
+    - |
+      OLD_IMAGES=$(docker images $IMAGE_NAME --format "{{.Tag}}" | sort | head -n -3)
+      if [ -n "$OLD_IMAGES" ]; then
+        for TAG in $OLD_IMAGES; do
+          docker rmi $IMAGE_NAME:$TAG || true
+        done
+      fi
